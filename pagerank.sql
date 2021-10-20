@@ -1,90 +1,93 @@
-CREATE PROCEDURE getCCo1
+CREATE PROCEDURE pageRankAlgorithm
 AS BEGIN
-
-DECLARE @curPR TABLE (
+DECLARE @PR TABLE (
         paperID INTEGER,
-        pageRank INTEGER,
+        pageRank DECIMAL(20, 7),
         PRIMARY KEY (paperID)
 );
-DECLARE @prevPR TABLE (
+DECLARE @tempPR TABLE (
         paperID INTEGER,
-        pageRank INTEGER,
+        pageRank DECIMAL(20, 7),
         PRIMARY KEY (paperID)
 );
-
 DECLARE @deltaPR TABLE (
-        paperID INTEGER,
-        pageRankChange INTEGER,
-        PRIMARY KEY (paperID)
+        difID INTEGER,
+        pageRankChange DECIMAL(20, 7),
+        PRIMARY KEY (difID)
 );
-
 DECLARE @sinks TABLE (
         paperID INTEGER,
         PRIMARY KEY (paperID)
 );
+DECLARE @citations TABLE (
+        paperID INTEGER,
+        citationsCount INTEGER,
+        PRIMARY KEY (paperID)
+);
+INSERT INTO @citations
+SELECT n.paperID, COUNT(DISTINCT e.citedpaperID)
+FROM nodes n LEFT OUTER JOIN edges e
+ON n.paperID = e.paperID
+GROUP BY n.paperID;
 
-DECLARE @dif INTEGER;
-SET @dif = 0;
+INSERT INTO @sinks
+SELECT c.paperID
+FROM @citations c
+WHERE c.citationsCount = 0;
 
-DECLARE @count INTEGER;
+DECLARE @dif DECIMAL(20, 7);
+SET @dif = 1;
+
+DECLARE @d DECIMAL(20, 7);
+SET @d = 0.85;
+
+DECLARE @count DECIMAL(20, 7);
 SET @count = (SELECT COUNT(*) FROM nodes);
 
-INSERT INTO @prevPR
-SELECT n.paperID, 1/@count
+DECLARE @totalSinkPR DECIMAL(20, 7);
+
+INSERT INTO @deltaPR 
+SELECT n.paperID, 0
 FROM nodes n;
-SELECT n.paperID, n.pageRank
-FROM @prevPR n;
 
+INSERT INTO @PR
+SELECT n.paperID, pageRank = 1 / @count
+FROM nodes n;
+WHILE (@dif > 0.01) BEGIN
+        SET @totalSinkPR = (SELECT SUM(pr.pageRank)
+        FROM @sinks s INNER JOIN @PR pr ON s.paperID = pr.paperID);
 
+        INSERT INTO @tempPR
+        SELECT e.citedpaperID, pageRank = (1 - @d) / @count + SUM(@d * pr.pageRank / c.citationsCount) + @d * @totalSinkPR / (@count - 1)
+        FROM @PR pr
+        INNER JOIN edges e ON pr.paperID = e.paperID
+        INNER JOIN @citations c ON pr.paperID = c.paperID
+        GROUP BY e.citedpaperID;
 
-WHILE (@dif <= 0.01) BEGIN
-        INSERT INTO @myComp 
-        SELECT TOP(1) n.paperID
-        FROM nodes n
-        WHERE n.paperID NOT IN (SELECT v.paperId FROM @visited v)
-        ORDER BY NEWID();
-        SET @prevSize = 0;
-        SET @curSize = 1;
-        WHILE (@curSize > @prevSize) BEGIN
-                INSERT INTO @myComp 
-                SELECT e.paperID
-                FROM edges e
-                WHERE e.citedPaperID IN (SELECT c.paperID FROM @myComp c) AND e.paperID NOT IN (SELECT c.paperID FROM @myComp c)
-                UNION 
-                SELECT e.citedPaperID
-                FROM edges e
-                WHERE e.paperID IN (SELECT c.paperID FROM @myComp c) AND e.citedPaperID NOT IN (SELECT c.paperID FROM @myComp c);
-                SET @prevSize= @curSize;
-                SET @curSize= (SELECT COUNT(*) FROM @myComp);
-        END
-        
-        INSERT INTO @visited
-        SELECT c.paperID
-        FROM @myComp c
-        WHERE c.paperID NOT IN (SELECT v.paperID FROM @visited v);
+        UPDATE @tempPR
+        SET pageRank = temp.pageRank – @d * pr.pageRank / (@count - 1)
+        FROM @tempPR temp INNER JOIN @PR pr ON temp.paperID = pr.paperID
+        WHERE pr.paperID IN (SELECT s.paperID FROM @sinks s);
 
-        IF (@curSize > 4 AND @curSize < 11) BEGIN
-                SELECT n.paperID, n.paperTitle
-                FROM nodes n
-                WHERE n.paperID IN (
-                        SELECT c.paperID
-                        FROM @myComp c
-                );
-        END
-        SET @visitedCount = (SELECT COUNT(*) FROM @visited);
-        DELETE FROM @myComp
+        UPDATE @deltaPR
+        SET pageRankChange = temp.pageRank - pr.pageRank
+        FROM @PR pr 
+        INNER JOIN @tempPR temp ON pr.paperID = temp.paperID
+        WHERE difId = pr.paperID;
+
+        DELETE FROM @PR;
+        INSERT INTO @PR
+        SELECT * FROM @tempPR;
+        DELETE FROM @tempPR;
+
         SET @dif = (SELECT SUM(d.pageRankChange) FROM @deltaPR d);
 END
 
+SELECT TOP(10) pr.paperID, n.paperTitle, pr.pageRank
+FROM @PR pr INNER JOIN nodes n ON pr.paperID = n.paperID
+ORDER BY pr.pageRank DESC;
 END;     
-
 GO
-
-EXECUTE getCCo1;
-
+EXECUTE pageRankAlgorithm;
 GO
-
-DROP PROCEDURE getCCo1;
-
-GO
-
+DROP PROCEDURE pageRankAlgorithm;
